@@ -7,6 +7,7 @@ import torch.nn as nn
 import eisner_for_dmv
 import utils
 import m_dir
+from torch_model.NN_trainer import *
 
 
 class ldmv_model(nn.Module):
@@ -171,19 +172,19 @@ class ldmv_model(nn.Module):
                     es = ratio
         return es
 
-    def em_e(self, batch_pos, batch_words, batch_sen, trans_counter, decision_counter, lex_counter, em_type):
+    def em_e(self, batch_pos, batch_words, batch_sen, trans_counter, decision_counter, lex_counter, em_type, child_model=None, decision_model=None):
         batch_pos = np.array(batch_pos)
         batch_words = np.array(batch_words)
         if em_type == 'viterbi':
             batch_likelihood = self.run_viterbi_estep(batch_pos, batch_words, batch_sen, trans_counter,
-                                                      decision_counter, lex_counter)
+                                                      decision_counter, lex_counter, child_model, decision_model)
         elif em_type == 'em':
             batch_likelihood = self.run_em_estep(batch_pos, batch_words, batch_sen, trans_counter, decision_counter,
                                                  lex_counter)
 
         return batch_likelihood
 
-    def run_viterbi_estep(self, batch_pos, batch_words, batch_sen, trans_counter, decision_counter, lex_counter):
+    def run_viterbi_estep(self, batch_pos, batch_words, batch_sen, trans_counter, decision_counter, lex_counter, child_model, decision_model):
         batch_score, batch_decision_score = self.evaluate_batch_score(batch_words, batch_pos)
         batch_score = np.array(batch_score)
         batch_decision_score = np.array(batch_decision_score)
@@ -194,8 +195,31 @@ class ldmv_model(nn.Module):
             batch_score = self.function_to_mask(batch_score,batch_pos)
 
         best_parse = eisner_for_dmv.batch_parse(batch_score, batch_decision_score, self.dvalency, self.cvalency)
-        batch_likelihood = self.update_counter(best_parse, trans_counter, decision_counter, lex_counter, batch_pos,
+        trans_counter_temp = np.zeros(trans_counter.shape)
+        batch_likelihood = self.update_counter(best_parse, trans_counter_temp, decision_counter, lex_counter, batch_pos,
                                                batch_words)
+        if True:
+            # train nn
+            child_x = list(np.nonzero(trans_counter_temp))
+            for idx in range(len(child_x[0])):
+                for k in range(6): # ??
+                    child_x[k] = np.append(child_x[k], [child_x[k][idx] for _ in range(int(trans_counter_temp[child_x[0][idx], child_x[1][idx], child_x[2][idx], child_x[3][idx], child_x[4][idx], child_x[5][idx]]-1))])
+            childAndDecisionANNMstep_torch(NN_child=child_model, NN_decision=decision_model, nn_epouches=1,
+                                           batch_size_nn=100,
+                                           child_rule_samples=child_x,
+                                           dec_rule_samples=None,
+                                           sentences_words_train=None,
+                                           sentence_lens_train=None,
+                                           dic2Tag=None, nb_classes=35,
+                                           valency_size=35,# childValency
+                                           chd_nn=1,
+                                           dec_nn=0,
+                                           chd_lr=1e-3,
+                                           dec_lr=1e-3
+                                           )
+
+            trans_counter = trans_counter + trans_counter_temp
+
         self.trans_counter = trans_counter
         self.lex_counter = lex_counter
         return batch_likelihood
@@ -308,7 +332,7 @@ class ldmv_model(nn.Module):
 
         return batch_likelihood
 
-    def em_m(self, trans_counter, decision_counter, lex_counter):
+    def em_m(self, trans_counter, decision_counter, lex_counter, child_model, decision_model):
         root_idx = self.pos['ROOT-POS']
         if self.tag_num > 1:
             self.param_smoothing = 1e-8
@@ -321,7 +345,16 @@ class ldmv_model(nn.Module):
         decision_sum = np.sum(decision_counter, axis=4).reshape(len(self.decision_pos), self.tag_num,
                                                                 2, self.dvalency, 1)
         # do normalization
-        self.trans_param = trans_counter / child_sum
+        if True:
+            # predict
+            predictBatchMStep(NN_child=child_model, NN_decision=decision_model,
+                              sentences_words=None,
+                              sentence_lens=None,
+                              sentences_posSeq=None,
+                              valency_size=1,
+                              trans_param = self.trans_param)
+        else:
+            self.trans_param = trans_counter / child_sum
         self.decision_param = decision_counter / decision_sum
         if self.use_lex:
             lex_sum = np.sum(lex_counter, axis=2).reshape(len(self.pos), self.tag_num, 1)

@@ -11,6 +11,9 @@ import eisner_for_dmv
 import utils
 from dmv_model import ldmv_model as LDMV
 
+from torch_model.NN_module import *
+# from torch_model.NN_trainer import *
+
 if __name__ == '__main__':
     parser = OptionParser()
     parser.add_option("--train", dest="train", help="train file", metavar="FILE", default="data/toy_data")
@@ -74,6 +77,10 @@ if __name__ == '__main__':
 
     parser.add_option("--seed", type="int", dest="seed", default=0)
 
+    parser.add_option("--child_nn", action="store_true", default=True)
+    parser.add_option("--decision_nn", action="store_true", default=True)
+    parser.add_option("--root_nn", action="store_true", default=True)
+
     (options, args) = parser.parse_args()
 
     if options.gpu >= 0 and torch.cuda.is_available():
@@ -117,7 +124,7 @@ if __name__ == '__main__':
     w2i, pos, sentences = utils.read_data(options.train, False)
     print 'Data read'
     with open(os.path.join(options.output, options.params + '_' + str(options.sample_idx)), 'w') as paramsfp:
-        pickle.dump((w2i, pos, options), paramsfp)
+        pickle.dump((w2i, pos, options), paramsfp)  # #Tags is 24 in WSJ??
     print 'Parameters saved'
     data_list = list()
     sen_idx = 0
@@ -145,6 +152,23 @@ if __name__ == '__main__':
         lv_dmv_model.cuda(options.gpu)
     no_split = True
     splitted_epoch = 0
+
+    print 'Pytorch model define'
+    # define hyper-parameters
+    nb_classes = 35
+    chd_head_dim = dec_head_dim = 10
+    chd_head_lstm_dim = chd_direct_dim = chd_lstm_hidden_dim = chd_softmax_layer_dim = 10
+    dec_head_lstm_dim = dec_direct_dim = dec_lstm_hidden_dim = dec_softmax_layer_dim = 10
+    childValency = 1
+    chd_valency_dim = dec_valency_dim = 5
+    chd_dropout_p = dec_dropout_p = 0.5
+
+    if options.child_nn:
+        child_model = AttnLSTM(head_dic_size=nb_classes, head_dim=chd_head_dim, head_lstm_size=nb_classes, head_lstm_dim=chd_head_lstm_dim, valency_size=childValency, valency_dim=chd_valency_dim, direct_size=2,
+        direct_dim=chd_direct_dim, nhid=chd_direct_dim, nclass=nb_classes, lstm_hidden_dim=chd_lstm_hidden_dim, dropout_p=chd_dropout_p, max_length=10, softmax_layer_dim=chd_softmax_layer_dim)
+        # decision_model = AttnLSTM(head_dic_size=nb_classes, head_dim=dec_head_dim, head_lstm_size=nb_classes, head_lstm_dim=dec_head_lstm_dim, valency_size=2, valency_dim=dec_valency_dim, direct_size=2,
+        #                  direct_dim=dec_direct_dim, nhid=dec_direct_dim, nclass=2, lstm_hidden_dim=dec_lstm_hidden_dim, dropout_p=dec_dropout_p, max_length=10, softmax_layer_dim=dec_softmax_layer_dim)
+
     for epoch in range(options.epochs):
         print "\n"
         print "Training epoch " + str(epoch)
@@ -198,9 +222,14 @@ if __name__ == '__main__':
                                                                     [s[1] for s in one_sub_batch], \
                                                                     [s[2][0] for s in one_sub_batch]
                     # E-step
-                    sub_batch_likelihood = lv_dmv_model.em_e(sub_batch_pos, sub_batch_words, sub_batch_sen,
+                    if not options.child_nn:
+                        sub_batch_likelihood = lv_dmv_model.em_e(sub_batch_pos, sub_batch_words, sub_batch_sen,
                                                              trans_counter, decision_counter, lex_counter,
                                                              lv_dmv_model.em_type)
+                    else:
+                        sub_batch_likelihood = lv_dmv_model.em_e(sub_batch_pos, sub_batch_words, sub_batch_sen,
+                                                             trans_counter, decision_counter, lex_counter,
+                                                             lv_dmv_model.em_type, child_model, None)
                     batch_likelihood += sub_batch_likelihood
                 training_likelihood += batch_likelihood
             print 'Likelihood for this iteration', training_likelihood
@@ -208,7 +237,7 @@ if __name__ == '__main__':
             if options.use_prior:
                 lv_dmv_model.apply_prior(trans_counter, lex_counter, options.prior_alpha, options.prior_epsilon,
                                          options.lex_prior_alpha, options.lex_epsilon)
-            lv_dmv_model.em_m(trans_counter, decision_counter, lex_counter)
+            lv_dmv_model.em_m(trans_counter, decision_counter, lex_counter, child_model, None)
 
         if options.do_eval:
             do_eval(lv_dmv_model, w2i, pos, options)

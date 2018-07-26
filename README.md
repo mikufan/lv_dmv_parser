@@ -22,6 +22,10 @@ viterbi
 --sub_batch
 1000
 --do_eval
+# 57.0109636469% ?? not 58-59?
+
+#RESULT:55.2: --train data/en-ud-train-nopunct-len10.conllu --dev data/ud10_test --epoch 25 --do_eval --split_epoch 4 --param_smoothing 0.1 --split_factor 2 --cvalency 1 --em_type em --function_mask
+
 
 Parameters with best performance using split-DMV(viterbi):
 --train
