@@ -1,3 +1,6 @@
+10.10
+add option :   --ml_comb_type 3
+
 # DONE: line 142  (ml_dmv_parser.py )   batch_predict_lan_v should be manually  given a value. I will revise it later.
 
 # DONE: line 308 (def evaluate_batch_score of ml_dmv_model.py) no use neural:

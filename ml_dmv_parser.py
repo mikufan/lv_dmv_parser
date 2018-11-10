@@ -10,7 +10,7 @@ from tqdm import tqdm
 import eisner_for_dmv
 import utils
 from ml_dmv_model import ml_dmv_model as MLDMV
-from ml_neural_m_step import m_step_model as MMODEL
+#from ml_neural_m_step import m_step_model as MMODEL
 
 # from torch_model.NN_module import *
 import random
@@ -97,6 +97,8 @@ if __name__ == '__main__':
     parser.add_option("--loaded_model_idx", type="int", dest="loaded_model_idx", default=1000)
 
     (options, args) = parser.parse_args()
+    if options.ml_comb_type == 3:
+            from ml_neural_m_step_emb import m_step_model as MMODEL
 
     if options.gpu >= 0 and torch.cuda.is_available():
         torch.cuda.set_device(options.gpu)
