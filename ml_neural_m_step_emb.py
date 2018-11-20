@@ -143,7 +143,7 @@ class m_step_model(nn.Module):
         loss = torch.nn.CrossEntropyLoss()
         if self.ml_comb_type == 3:
             lang_output_before = F.relu(self.lang_classifier_before(stc_representation))
-            lang_output = lang_output_before * self.llookup.weight
+            lang_output = torch.mm(lang_output_before, torch.transpose(self.llookup.weight,0,1))
         else:
             lang_output = self.lang_classifier(stc_representation)
         lang_loss = loss(lang_output, batch_target)
