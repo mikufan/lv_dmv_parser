@@ -26,16 +26,16 @@ class m_step_model(nn.Module):
         self.decision_pre_output_dim = options.decision_pre_output_dim
         self.drop_out = options.drop_out
         self.lan_num = lan_num
-        self.ml_comb_type = options.ml_comb_type  # options.ml_comb_type = 0(no_lang_id)/1(id embeddings)/2(classify-tags)/3(joint_training)
+        self.ml_comb_type = options.ml_comb_type  # options.ml_comb_type = 0(no_lang_id)/1(id embeddings)/2(classify-tags)/3(joint_training)/4(joint-learning-and-two-channel)
         self.stc_model_type = options.stc_model_type  # 1  lstm   2 lstm with atten   3 variational
         self.non_dscrm_iter = options.non_dscrm_iter
 
-        if self.ml_comb_type == 3:
+        if self.ml_comb_type == 3 or self.ml_comb_type == 4:
             self.stc_model_type = 1
 
         if self.ml_comb_type == 1:
             self.lang_dim = options.lang_dim  # options.lang_dim = 10(default)
-        elif self.ml_comb_type == 2 or self.ml_comb_type == 3:
+        elif self.ml_comb_type == 2 or self.ml_comb_type == 3 or self.ml_comb_type == 4:
             self.lang_dim = options.lang_dim
             self.lstm_layer_num = options.lstm_layer_num  # 1
             self.lstm_hidden_dim = options.lstm_hidden_dim  # 10
@@ -58,18 +58,12 @@ class m_step_model(nn.Module):
                                                     self.lstm_direct * self.lstm_hidden_dim)  # log var.pow(2)
         if self.ml_comb_type == 3:
             self.lang_classifier_before = nn.Linear(self.lstm_direct * self.lstm_hidden_dim, self.lang_dim)
-        # elif self.ml_comb_type == 3:
-        #     self.lang_dim = options.lang_dim
-        #     self.lang_dim = options.lang_dim
-        #     self.lstm_layer_num = options.lstm_layer_num  # 1
-        #     self.lstm_hidden_dim = options.lstm_hidden_dim  # 10
-        #     self.bidirectional = options.bidirectional  # True
-        #     self.lstm_direct = 2 if self.bidirectional else 1
-        #     self.hidden = self.init_hidden(1)  # 1 here is just for init, will be changed in forward process
-        #     self.lstm = nn.LSTM(self.pembedding_dim, self.lstm_hidden_dim, num_layers=self.lstm_layer_num,
-        #                         bidirectional=self.bidirectional,
-        #                         batch_first=True)  # hidden_dim // 2, num_layers=1, bidirectional=True
-        #     self.lang_classifier = nn.Linear(self.lstm_direct * self.lstm_hidden_dim, self.lan_num)
+        elif self.ml_comb_type == 4:
+            self.lang_classifier_before = nn.Linear(self.lstm_direct * self.lstm_hidden_dim, self.lang_dim)
+            self.lang_indep_plookup = nn.Embedding(self.tag_num, self.pembedding_dim)
+            self.lang_indep_linear_layer_1 = nn.Linear(self.pembedding_dim, self.hid_dim)
+            self.lang_indep_linear_later_2 = nn.Linear(self.hid_dim, self.hid_dim)
+            self.channel_atten_weight_linear = nn.Linear(self.hid_dim*2, 2)
 
 
         self.plookup = nn.Embedding(self.tag_num, self.pembedding_dim)
@@ -77,7 +71,7 @@ class m_step_model(nn.Module):
         self.vlookup = nn.Embedding(self.cvalency, self.valency_dim)
         self.dvlookup = nn.Embedding(self.dvalency, self.valency_dim)
         self.head_lstm_embeddings = self.plookup
-        if self.ml_comb_type == 1 or self.ml_comb_type == 3:
+        if self.ml_comb_type == 1 or self.ml_comb_type == 3 or self.ml_comb_type == 4:
             self.llookup = nn.Embedding(self.lan_num, self.lang_dim)
 
         self.dropout_layer = nn.Dropout(p=self.drop_out)
@@ -89,7 +83,7 @@ class m_step_model(nn.Module):
             if self.ml_comb_type == 0:
                 self.left_hid = nn.Linear((self.pembedding_dim + self.valency_dim), self.hid_dim)
                 self.right_hid = nn.Linear((self.pembedding_dim + self.valency_dim), self.hid_dim)
-            elif self.ml_comb_type == 1 or self.ml_comb_type == 3:
+            elif self.ml_comb_type == 1 or self.ml_comb_type == 3 or self.ml_comb_type == 4:
                 self.left_hid = nn.Linear((self.pembedding_dim + self.valency_dim + self.lang_dim), self.hid_dim)
                 self.right_hid = nn.Linear((self.pembedding_dim + self.valency_dim + self.lang_dim), self.hid_dim)
             elif self.ml_comb_type == 2:
@@ -177,6 +171,12 @@ class m_step_model(nn.Module):
             var_out = self.reparameterize(self.training, mu, logvar)
             return var_out, -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
+    def lang_indep_channel(self, batch_pos):
+        p_embeds = self.lang_indep_plookup(batch_pos)
+        lang_indep_v = self.lang_indep_linear_layer_1(F.relu(p_embeds))
+        lang_indep_v = self.lang_indep_linear_later_2(F.relu(lang_indep_v))
+        return lang_indep_v
+
     def forward_(self, batch_pos, batch_dir, batch_valence, batch_target, batch_target_count,
                  is_prediction, type, em_type, batch_lang_id, sentences, sentences_len, epoch):
         p_embeds = self.plookup(batch_pos)
@@ -212,6 +212,13 @@ class m_step_model(nn.Module):
                                                                                       tuple) else stc_representation_and_vae_loss
                 if not is_prediction:
                     lang_cls_loss = self.lang_loss(stc_representation, batch_lang_id)
+            elif self.ml_comb_type == 4:
+                lang_embeds = self.llookup(batch_lang_id)
+                input_embeds = torch.cat((p_embeds, v_embeds, lang_embeds), 1)
+                stc_representation_and_vae_loss = self.stc_representation(sentences, sentences_len, p_embeds)
+                stc_representation = stc_representation_and_vae_loss[0] if isinstance(stc_representation_and_vae_loss, tuple) else stc_representation_and_vae_loss
+                if not is_prediction:
+                    lang_cls_loss = self.lang_loss(stc_representation, batch_lang_id)
             input_embeds = self.dropout_layer(input_embeds)
             left_v = self.left_hid(input_embeds)
             left_v = F.relu(left_v)
@@ -220,6 +227,11 @@ class m_step_model(nn.Module):
             left_v = left_v.masked_fill(left_mask, 0.0)
             right_v = right_v.masked_fill(right_mask, 0.0)
             hidden_v = left_v + right_v
+            if self.ml_comb_type == 4:
+                lang_indep_hidden_v = self.lang_indep_channel(batch_pos)
+                # hidden_v = hidden_v + lang_indep_hidden_v #
+                channel_atten_weight = F.softmax(self.channel_atten_weight_linear(torch.cat((lang_indep_hidden_v, hidden_v), dim=1)))
+                hidden_v = (lang_indep_hidden_v * channel_atten_weight[:,0:1].expand(lang_indep_hidden_v.size()[0], lang_indep_hidden_v.size()[1])) * (hidden_v * channel_atten_weight[:,1:2].expand(hidden_v.size()[0], hidden_v.size()[1]))
         else:
             input_embeds = torch.cat((p_embeds, v_embeds, d_embeds), 1)
             hidden_v = self.hid(input_embeds)

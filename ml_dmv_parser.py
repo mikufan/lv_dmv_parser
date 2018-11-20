@@ -10,7 +10,9 @@ from tqdm import tqdm
 import eisner_for_dmv
 import utils
 from ml_dmv_model import ml_dmv_model as MLDMV
-#from ml_neural_m_step import m_step_model as MMODEL
+# from ml_neural_m_step import m_step_model as MMODEL
+# from ml_neural_m_step_emb import m_step_model as MMODEL
+
 
 # from torch_model.NN_module import *
 import random
@@ -79,7 +81,6 @@ if __name__ == '__main__':
     parser.add_option("--reset_weight", action="store_true", dest="reset_weight", default=False)
     parser.add_option("--dir_embed", action="store_true", dest="dir_embed", default=False)
     parser.add_option("--dir_dim", type="int", dest="dir_dim", default=1)
-    # parser.add_option("--use_neural", action="store_true", dest="use_neural", default=False)
 
     parser.add_option("--child_neural", action="store_true", dest="child_neural", default=False)
     parser.add_option("--root_neural", action="store_true", dest="root_neural", default=False)
@@ -97,8 +98,8 @@ if __name__ == '__main__':
     parser.add_option("--loaded_model_idx", type="int", dest="loaded_model_idx", default=1000)
 
     (options, args) = parser.parse_args()
-    if options.ml_comb_type == 3:
-            from ml_neural_m_step_emb import m_step_model as MMODEL
+    if options.ml_comb_type == 3 or options.ml_comb_type == 4:
+        from ml_neural_m_step_emb import m_step_model as MMODEL
 
     if options.gpu >= 0 and torch.cuda.is_available():
         torch.cuda.set_device(options.gpu)
@@ -190,7 +191,7 @@ if __name__ == '__main__':
     else:
         pos, sentences, languages, language_map = utils.read_ml_corpus(options.language_path, options.train, stc_length=15, isPredict=False, isadd=True)  # language: lang2i
 
-    sentence_language_map = {}
+    # sentence_language_map = {}
     # print 'Data read'
     # with open(os.path.join(options.output, options.params + '_' + str(options.sample_idx)), 'w') as paramsfp:
     #     pickle.dump((pos, options), paramsfp)
@@ -213,23 +214,17 @@ if __name__ == '__main__':
     data_pos = np.array(data_pos)  # list of sentences with only tags
     batch_data = utils.construct_update_batch_data(data_list, options.batchsize)  # data_list: tag_seq, lang_id, stc_id
     print 'Batch data constructed'
-    data_size = len(data_list)
 
-    print 'Model constructed'
+    print 'Model constructed: ml_dmv_model and m_model'
+    data_size = len(data_list)
     load_file = os.path.join(options.output, options.paramem) + '_' + str(options.loaded_model_idx)
     ml_dmv_model = MLDMV(pos, sentence_map, language_map, data_size, options)
     if (not options.load_model) or (not os.path.exists(load_file)):
         ml_dmv_model.init_param(sentences)
     else:
-        ml_dmv_model.trans_param, ml_dmv_model.root_param, ml_dmv_model.decision_param, ml_dmv_model.sentence_trans_param = pickle.load(open(load_file, 'r'))
+        ml_dmv_model.trans_param, ml_dmv_model.root_param, ml_dmv_model.decision_param, _ = pickle.load(open(load_file, 'r'))  # ml_dmv_model.sentence_trans_param
     epoch = -1
     do_eval(ml_dmv_model, None, pos, options, epoch)
-
-    print 'Decoder parameters initialized'
-    if options.gpu >= 0 and torch.cuda.is_available():
-        torch.cuda.set_device(options.gpu)
-        ml_dmv_model.cuda(options.gpu)
-
     loaded_file = os.path.join(options.output, os.path.basename(options.model) + '_' + str(options.loaded_model_idx))
     if (not options.load_model) or (not os.path.exists(loaded_file)):
         # if options.child_neural or options.decision_neural:
@@ -237,6 +232,10 @@ if __name__ == '__main__':
     else:
         m_model = torch.load(loaded_file)
 
+    print 'Decoder parameters initialized: cuda'
+    if options.gpu >= 0 and torch.cuda.is_available():
+        torch.cuda.set_device(options.gpu)
+        ml_dmv_model.cuda(options.gpu)  #?? not m_model?
 
     for epoch in range(options.epochs):
         print "\n"
@@ -282,78 +281,81 @@ if __name__ == '__main__':
             # Using neural networks to update DMV parameters
             if options.child_neural or options.decision_neural:
                 for e in range(options.neural_epoch):
-
-                    iter_loss = 0.0
                     # Put training samples in batches
                     batch_input_data, batch_target_data, batch_decision_data, batch_decision_target_data = \
                         utils.construct_ml_input_data(ml_dmv_model.rule_samples, ml_dmv_model.decision_samples,
                                                       sentence_map, options.sample_batch_size, options.em_type)
                     print 'batch_data for M-step constructed'
-                    batch_num = len(batch_input_data['input_pos'])
-                    tot_batch = batch_num
-                    for batch_id in tqdm(range(batch_num), mininterval=2, desc=' -Tot it %d (iter %d)' % (tot_batch, 0),
-                                         leave=False, file=sys.stdout):
-                        # Input for the network: head_pos,direction,child valency
-                        batch_input_pos_v = torch.LongTensor(batch_input_data['input_pos'][batch_id])
-                        batch_input_dir_v = torch.LongTensor(batch_input_data['input_dir'][batch_id])
-                        batch_cvalency_v = torch.LongTensor(batch_input_data['cvalency'][batch_id])
-                        batch_input_sen_v = []
-                        for sentence_id in batch_input_data['sentence'][batch_id]:
-                            batch_input_sen_v.append(data_pos[int(sentence_id)])
-                        batch_input_sen_v = torch.LongTensor(batch_input_sen_v)
-                        batch_target_lan_v = torch.LongTensor(batch_target_data['target_lan'][batch_id])
-                        batch_target_pos_v = torch.LongTensor(batch_target_data['target_pos'][batch_id])
-                        if options.em_type == 'em':
-                            batch_target_pos_count_v = torch.FloatTensor(batch_target_data['target_count'][batch_id])
-                        else:
-                            batch_target_pos_count_v = None
-                        batch_input_len = len(batch_input_sen_v[0])
-                        batch_loss = m_model.forward_(batch_input_pos_v, batch_input_dir_v, batch_cvalency_v,
-                                                      batch_target_pos_v, batch_target_pos_count_v, False, 'child',
-                                                      options.em_type, batch_target_lan_v, batch_input_sen_v,
-                                                      batch_input_len, epoch=epoch)
-                        iter_loss += batch_loss
-                        batch_loss.backward()
-                        m_model.optim.step()
-                        m_model.optim.zero_grad()
-                    print "child loss for this iteration is " + str(iter_loss.detach().data.numpy() / batch_num)
+                    if options.child_neural:
+                        batch_num = len(batch_input_data['input_pos'])
+                        tot_batch = batch_num
+                        iter_loss = 0.0
+                        for batch_id in tqdm(range(batch_num), mininterval=2, desc=' -Tot it %d (iter %d)' % (tot_batch, 0),
+                                             leave=False, file=sys.stdout):
+                            # Input for the network: head_pos,direction,child valency
+                            batch_input_pos_v = torch.LongTensor(batch_input_data['input_pos'][batch_id])
+                            batch_input_dir_v = torch.LongTensor(batch_input_data['input_dir'][batch_id])
+                            batch_cvalency_v = torch.LongTensor(batch_input_data['cvalency'][batch_id])
+                            batch_input_sen_v = []
+                            for sentence_id in batch_input_data['sentence'][batch_id]:
+                                batch_input_sen_v.append(data_pos[int(sentence_id)])
+                            batch_input_sen_v = torch.LongTensor(batch_input_sen_v)
+                            batch_target_lan_v = torch.LongTensor(batch_target_data['target_lan'][batch_id])
+                            batch_target_pos_v = torch.LongTensor(batch_target_data['target_pos'][batch_id])
+                            if options.em_type == 'em':
+                                batch_target_pos_count_v = torch.FloatTensor(batch_target_data['target_count'][batch_id])
+                            else:
+                                batch_target_pos_count_v = None
+                            batch_input_len = len(batch_input_sen_v[0])
+                            batch_loss = m_model.forward_(batch_input_pos_v, batch_input_dir_v, batch_cvalency_v,
+                                                          batch_target_pos_v, batch_target_pos_count_v, False, 'child',
+                                                          options.em_type, batch_target_lan_v, batch_input_sen_v,
+                                                          batch_input_len, epoch=epoch)
+                            iter_loss += batch_loss
+                            batch_loss.backward()
+                            m_model.optim.step()
+                            m_model.optim.zero_grad()
+                        print "child loss for this iteration is " + str(iter_loss.detach().data.numpy() / batch_num)
                     # Network for decision distribution
-                    if not options.child_only:
-                        pass
-                        # batch_num = len(batch_decision_data['decision_pos'])
-                        # tot_batch = batch_num
-                        # iter_decision_loss = 0.0
-                        # for decision_batch_id in tqdm(
-                        #         range(batch_num), mininterval=2,
-                        #         desc=' -Tot it %d (iter %d)' % (tot_batch, 0), leave=False, file=sys.stdout):
-                        #     # Input for decision network: pos,direction,decision_valency
-                        #     batch_decision_pos_v = torch.LongTensor(batch_decision_data['decision_pos'][batch_id])
-                        #     batch_dvalency_v = torch.LongTensor(batch_decision_data['dvalency'][batch_id])
-                        #     batch_decision_dir_v = torch.LongTensor(batch_decision_data['decision_dir'][batch_id])
-                        #     batch_target_decision_v = torch.LongTensor(
-                        #         batch_target_decision_data['decision_target'][batch_id])
-                        #     if options.em_type == 'em':
-                        #         batch_target_decision_count_v = torch.FloatTensor(
-                        #             batch_target_decision_data['decision_target_count'][batch_id])
-                        #     else:
-                        #         batch_target_decision_count_v = None
-                        #     if options.unified_network:
-                        #         batch_decision_loss = m_model.forward_(batch_decision_pos_v, batch_decision_dir_v,
-                        #                                                batch_dvalency_v, batch_target_decision_v,
-                        #                                                batch_target_decision_count_v, False, 'decision',
-                        #                                                options.em_type)
-                        #     else:
-                        #         batch_decision_loss = m_model.forward_decision(batch_decision_pos_v,
-                        #                                                        batch_decision_dir_v, batch_dvalency_v,
-                        #                                                        batch_target_decision_v,
-                        #                                                        batch_target_decision_count_v, False,
-                        #                                                        options.em_type)
-                        #     iter_decision_loss += batch_decision_loss
-                        #     batch_decision_loss.backward()
-                        #     m_model.optim.step()
-                        #     m_model.optim.zero_grad()
-                        # print "decision loss for this iteration is " + str(
-                        #     iter_decision_loss.detach().data.numpy() / batch_num)
+                    if options.decision_neural:
+                        batch_num = len(batch_decision_data['decision_pos'])
+                        tot_batch = batch_num
+                        iter_decision_loss = 0.0
+                        for decision_batch_id in tqdm(
+                                range(batch_num), mininterval=2,
+                                desc=' -Tot it %d (iter %d)' % (tot_batch, 0), leave=False, file=sys.stdout):
+                            # Input for decision network: pos,direction,decision_valency
+                            batch_decision_pos_v = torch.LongTensor(batch_decision_data['decision_pos'][batch_id])
+                            batch_dvalency_v = torch.LongTensor(batch_decision_data['dvalency'][batch_id])
+                            batch_decision_dir_v = torch.LongTensor(batch_decision_data['decision_dir'][batch_id])
+                            batch_target_decision_v = torch.LongTensor(batch_decision_target_data['decision_target'][batch_id])
+                            batch_decision_input_sen_v = []
+                            for sentence_id in batch_decision_data['sentence'][batch_id]:
+                                batch_decision_input_sen_v.append(data_pos[int(sentence_id)])
+                            batch_decision_input_sen_v = torch.LongTensor(batch_decision_input_sen_v)
+                            batch_decision_target_lan_v = torch.LongTensor(batch_decision_data['target_lan'][batch_id])
+                            batch_decision_target_pos_v = torch.LongTensor(batch_decision_data['target_pos'][batch_id])
+                            if options.em_type == 'em':
+                                batch_target_decision_count_v = torch.FloatTensor(batch_decision_target_data['decision_target_count'][batch_id])
+                            else:
+                                batch_target_decision_count_v = None
+                            if options.unified_network:
+                                batch_decision_loss = m_model.forward_(batch_decision_pos_v, batch_decision_dir_v,
+                                                                       batch_dvalency_v, batch_target_decision_v,
+                                                                       batch_target_decision_count_v, False, 'decision',
+                                                                       options.em_type)
+                            else:
+                                batch_decision_loss = m_model.forward_decision(batch_decision_pos_v,
+                                                                               batch_decision_dir_v, batch_dvalency_v,
+                                                                               batch_target_decision_v,
+                                                                               batch_target_decision_count_v, False,
+                                                                               options.em_type)
+                            iter_decision_loss += batch_decision_loss
+                            batch_decision_loss.backward()
+                            m_model.optim.step()
+                            m_model.optim.zero_grad()
+                        print "decision loss for this iteration is " + str(
+                            iter_decision_loss.detach().data.numpy() / batch_num)
                 copy_sentence_trans_param = ml_dmv_model.sentence_trans_param.copy()
                 copy_decision_param = ml_dmv_model.decision_param.copy()
                 # copy_trans_param = ml_dmv_model.trans_param.copy()

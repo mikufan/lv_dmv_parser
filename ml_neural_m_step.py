@@ -299,8 +299,7 @@ class m_step_model(nn.Module):
                                                       None, None, True, 'child',
                                                       self.em_type, batch_target_lan_v, batch_input_sen_v,
                                                       batch_input_len, epoch=epoch)
-                sentence_trans_param[s][one_batch_input_pos_index, :, one_batch_dir_index, \
-                one_batch_cvalency_index] = predicted_trans_param.detach().numpy()#.reshape(one_batch_size, target_pos_num, 1, 1)
+                sentence_trans_param[s][one_batch_input_pos_index, :, one_batch_dir_index, one_batch_cvalency_index] = predicted_trans_param.detach().numpy()#.reshape(one_batch_size, target_pos_num, 1, 1)
         # TODO:
         # if not child_only:
         #     for i in range(decision_batch_num):
